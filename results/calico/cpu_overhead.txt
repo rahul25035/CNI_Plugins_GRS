@@ -1,0 +1,32 @@
+=== CALICO CPU/MEMORY OVERHEAD ===
+Timestamp: Sun Mar 29 10:28:49 PM IST 2026
+
+=== KUBE-SYSTEM PODS ===
+NAME                                                   CPU-REQ   MEM-REQ
+coredns-76f75df574-mpjlz                               100m      70Mi
+coredns-76f75df574-rfwf8                               100m      70Mi
+etcd-calico-cluster-control-plane                      100m      100Mi
+kube-apiserver-calico-cluster-control-plane            250m      <none>
+kube-controller-manager-calico-cluster-control-plane   200m      <none>
+kube-proxy-bndf7                                       <none>    <none>
+kube-proxy-mfcgb                                       <none>    <none>
+kube-proxy-rmhzt                                       <none>    <none>
+kube-scheduler-calico-cluster-control-plane            100m      <none>
+
+=== CALICO-SYSTEM PODS ===
+NAME                                       CPU-REQ   MEM-REQ
+calico-kube-controllers-7cbbc6fb54-7cbwr   <none>    <none>
+calico-node-72sch                          <none>    <none>
+calico-node-d6qsk                          <none>    <none>
+calico-node-m6rr2                          <none>    <none>
+calico-typha-856d7bf65-c9b56               <none>    <none>
+calico-typha-856d7bf65-wqctj               <none>    <none>
+csi-node-driver-4phhz                      <none>    <none>
+csi-node-driver-4zkwj                      <none>    <none>
+csi-node-driver-c9l6x                      <none>    <none>
+
+=== NOTE ON CALICO RESOURCE USAGE ===
+Calico ships with no fixed resource requests (resources: {}) by design.
+It dynamically scales CPU usage based on cluster policy load.
+Typical observed usage: 100-250m CPU per node at idle.
+calico-typha acts as a proxy to reduce API server load in larger clusters.

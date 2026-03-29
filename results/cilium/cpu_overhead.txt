@@ -1,0 +1,58 @@
+=== CILIUM CPU/MEMORY OVERHEAD ===
+Timestamp: Sun Mar 29 10:37:21 PM IST 2026
+
+=== KUBE-SYSTEM PODS (cilium components) ===
+NAME                                                   CPU-REQ   MEM-REQ
+cilium-d9rkd                                           <none>    <none>
+cilium-jlnz6                                           <none>    <none>
+cilium-lfc86                                           <none>    <none>
+cilium-operator-6b8f454664-crlcr                       <none>    <none>
+cilium-operator-6b8f454664-hxp5r                       <none>    <none>
+coredns-76f75df574-psjlp                               100m      70Mi
+coredns-76f75df574-sphwp                               100m      70Mi
+etcd-cilium-cluster-control-plane                      100m      100Mi
+kube-apiserver-cilium-cluster-control-plane            250m      <none>
+kube-controller-manager-cilium-cluster-control-plane   200m      <none>
+kube-proxy-49qzx                                       <none>    <none>
+kube-proxy-rq4ml                                       <none>    <none>
+kube-proxy-thqcc                                       <none>    <none>
+kube-scheduler-cilium-cluster-control-plane            100m      <none>
+
+=== CILIUM DAEMONSET RESOURCE SPEC ===
+        resources: {}
+        securityContext:
+          capabilities:
+            add:
+            - CHOWN
+            - KILL
+            - NET_ADMIN
+            - NET_RAW
+            - IPC_LOCK
+--
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: FallbackToLogsOnError
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      - command:
+        - sh
+        - -ec
+--
+        resources: {}
+        securityContext:
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_CHROOT
+            - SYS_PTRACE
+            drop:
+            - ALL
+--
+
+=== NOTE ON CILIUM RESOURCE USAGE ===
+Cilium runs an agent (daemonset) on every node to manage eBPF programs.
+The cilium-operator runs once cluster-wide for coordination.
+eBPF programs run in kernel space - their CPU cost appears under the kernel,
+not directly under the cilium pod. This makes overhead harder to measure
+purely from pod resource requests.
