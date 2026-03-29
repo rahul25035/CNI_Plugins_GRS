@@ -7,9 +7,9 @@
 
 set -e
 
-RESULTS_DIR="$HOME/cni-comparison/results/cilium"
+RESULTS_DIR="$HOME/Desktop/cni-comparison/results/cilium"
 CLUSTER_NAME="cilium-cluster"
-PROJECT_DIR="$HOME/cni-comparison"
+PROJECT_DIR="$HOME/Desktop/cni-comparison"
 
 echo "============================================================"
 echo "  Cilium CNI Benchmark"
@@ -86,9 +86,11 @@ kubectl get pods -o wide
 
 SERVER_IP=$(kubectl get pod iperf3-server -o jsonpath='{.status.podIP}')
 BACKEND_IP=$(kubectl get pod -l app=backend -o jsonpath='{.items[0].status.podIP}')
+SERVER_NODE=$(kubectl get pod iperf3-server -o jsonpath='{.spec.nodeName}')
 echo ""
 echo "iperf3 server IP: $SERVER_IP"
 echo "backend IP:       $BACKEND_IP"
+echo "iperf3 server node: $SERVER_NODE  (test pods will run on the other worker)"
 
 # ---- TEST 1: Latency (ping) ----
 echo ""
@@ -98,6 +100,7 @@ sleep 2
 kubectl run latency-test \
   --image=busybox \
   --restart=Never \
+  --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- ping -c 100 -i 0.2 $SERVER_IP
 
 echo "Waiting 40 seconds for ping to complete..."
@@ -115,12 +118,23 @@ sleep 2
 kubectl run iperf3-client \
   --image=networkstatic/iperf3 \
   --restart=Never \
+  --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- iperf3 -c $SERVER_IP -t 30 -J
 
-echo "Waiting 50 seconds for iperf3 to complete..."
-sleep 50
+echo "Waiting for iperf3-client pod to complete (up to 2 min)..."
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/iperf3-client --timeout=120s \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/iperf3-client --timeout=10s \
+  || true
+sleep 3
 
 kubectl logs iperf3-client > "$RESULTS_DIR/bandwidth_iperf3.json"
+
+if [ ! -s "$RESULTS_DIR/bandwidth_iperf3.json" ]; then
+  echo "ERROR: iperf3 output is empty. Pod status:"
+  kubectl describe pod iperf3-client | tail -20
+  exit 1
+fi
+
 echo "Bandwidth result:"
 python3 -c "
 import json
@@ -163,6 +177,7 @@ sleep 2
 kubectl run http-test \
   --image=busybox \
   --restart=Never \
+  --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- sh -c "
     i=0
     while [ \$i -lt 50 ]; do

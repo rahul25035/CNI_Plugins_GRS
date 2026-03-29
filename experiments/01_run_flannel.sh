@@ -6,9 +6,9 @@
 
 set -e  # stop on any error
 
-RESULTS_DIR="$HOME/cni-comparison/results/flannel"
+RESULTS_DIR="$HOME/Desktop/cni-comparison/results/flannel"
 CLUSTER_NAME="flannel-cluster"
-PROJECT_DIR="$HOME/cni-comparison"
+PROJECT_DIR="$HOME/Desktop/cni-comparison"
 
 echo "============================================================"
 echo "  Flannel CNI Benchmark"
@@ -70,12 +70,16 @@ kubectl wait --for=condition=Ready pods -l app=backend --timeout=180s
 echo "All workloads are running:"
 kubectl get pods -o wide
 
-# Get server IP for tests
+# Get server IP and node for tests
 SERVER_IP=$(kubectl get pod iperf3-server -o jsonpath='{.status.podIP}')
 BACKEND_IP=$(kubectl get pod -l app=backend -o jsonpath='{.items[0].status.podIP}')
+# Record which node the server is on so test pods are forced to a DIFFERENT node
+# This ensures all tests measure real cross-node traffic through the CNI, not same-node loopback
+SERVER_NODE=$(kubectl get pod iperf3-server -o jsonpath='{.spec.nodeName}')
 echo ""
 echo "iperf3 server IP: $SERVER_IP"
 echo "backend IP:       $BACKEND_IP"
+echo "iperf3 server node: $SERVER_NODE  (test pods will run on the other worker)"
 
 # ---- TEST 1: Latency (ping) ----
 # Sends 100 pings at 0.2s intervals (total ~20s), saves min/avg/max stats
@@ -83,9 +87,11 @@ echo ""
 echo "[Test 1] Running latency test (100 pings to iperf3-server)..."
 kubectl delete pod latency-test --ignore-not-found 2>/dev/null
 sleep 2
+# --overrides forces latency-test onto a different node than iperf3-server (cross-node traffic)
 kubectl run latency-test \
   --image=busybox \
   --restart=Never \
+  --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- ping -c 100 -i 0.2 $SERVER_IP
 
 echo "Waiting 40 seconds for ping to complete..."
@@ -101,9 +107,11 @@ echo ""
 echo "[Test 2] Running bandwidth test (iperf3, 30 seconds)..."
 kubectl delete pod iperf3-client --ignore-not-found 2>/dev/null
 sleep 2
+# --overrides forces iperf3-client onto a different node than iperf3-server (cross-node traffic)
 kubectl run iperf3-client \
   --image=networkstatic/iperf3 \
   --restart=Never \
+  --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- iperf3 -c $SERVER_IP -t 30 -J
 
 echo "Waiting for iperf3-client pod to complete (up to 2 min)..."
@@ -158,9 +166,11 @@ echo ""
 echo "[Test 4] Running HTTP microservice latency test (50 requests)..."
 kubectl delete pod http-test --ignore-not-found 2>/dev/null
 sleep 2
+# --overrides forces http-test onto a different node than iperf3-server (cross-node HTTP traffic)
 kubectl run http-test \
   --image=busybox \
   --restart=Never \
+  --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- sh -c "
     i=0
     while [ \$i -lt 50 ]; do

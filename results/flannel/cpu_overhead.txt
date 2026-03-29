@@ -1,0 +1,42 @@
+=== FLANNEL CPU/MEMORY OVERHEAD ===
+Timestamp: Sun Mar 29 10:20:17 PM IST 2026
+
+=== KUBE-SYSTEM PODS ===
+NAME                                                    CPU-REQ   MEM-REQ
+coredns-76f75df574-gsrkq                                100m      70Mi
+coredns-76f75df574-lzljs                                100m      70Mi
+etcd-flannel-cluster-control-plane                      100m      100Mi
+kube-apiserver-flannel-cluster-control-plane            250m      <none>
+kube-controller-manager-flannel-cluster-control-plane   200m      <none>
+kube-proxy-5xjf5                                        <none>    <none>
+kube-proxy-c5kms                                        <none>    <none>
+kube-proxy-q6x4b                                        <none>    <none>
+kube-scheduler-flannel-cluster-control-plane            100m      <none>
+
+=== FLANNEL DAEMONSET PODS (one per node) ===
+NAME                    CPU-REQ   MEM-REQ
+kube-flannel-ds-8qdjr   100m      50Mi
+kube-flannel-ds-pwhrb   100m      50Mi
+kube-flannel-ds-z85wr   100m      50Mi
+
+=== FLANNEL RESOURCE SPEC ===
+        resources:
+          requests:
+            cpu: 100m
+            memory: 50Mi
+        securityContext:
+          capabilities:
+--
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /opt/cni/bin
+          name: cni-plugin
+--
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/cni/net.d
+          name: cni
