@@ -106,10 +106,21 @@ kubectl run iperf3-client \
   --restart=Never \
   -- iperf3 -c $SERVER_IP -t 30 -J
 
-echo "Waiting 50 seconds for iperf3 to complete..."
-sleep 50
+echo "Waiting for iperf3-client pod to complete (up to 2 min)..."
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/iperf3-client --timeout=120s \
+  || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/iperf3-client --timeout=10s \
+  || true
+sleep 3  # brief settle so logs are fully flushed
 
 kubectl logs iperf3-client > "$RESULTS_DIR/bandwidth_iperf3.json"
+
+# Verify the file is non-empty before parsing
+if [ ! -s "$RESULTS_DIR/bandwidth_iperf3.json" ]; then
+  echo "ERROR: iperf3 output is empty. Pod status:"
+  kubectl describe pod iperf3-client | tail -20
+  exit 1
+fi
+
 echo "Bandwidth result:"
 python3 -c "
 import json
