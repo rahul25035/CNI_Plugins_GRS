@@ -9,7 +9,7 @@
 # Total estimated time: 30-45 minutes
 # ============================================================
 
-PROJECT_DIR="$HOME/cni-comparison"
+PROJECT_DIR="$HOME/Desktop/cni-comparison"
 EXPERIMENTS_DIR="$PROJECT_DIR/experiments"
 
 echo "============================================================"
