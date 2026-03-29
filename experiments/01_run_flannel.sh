@@ -10,65 +10,44 @@ RESULTS_DIR="$HOME/Desktop/cni-comparison/results/flannel"
 CLUSTER_NAME="flannel-cluster"
 PROJECT_DIR="$HOME/Desktop/cni-comparison"
 
-echo "============================================================"
-echo "  Flannel CNI Benchmark"
-echo "  Results will be saved to: $RESULTS_DIR"
-echo "============================================================"
+echo "[flannel] Results -> $RESULTS_DIR"
 
 # ---- CLEANUP: remove old cluster if it exists from a previous run ----
-echo ""
-echo "[Cleanup] Removing any existing flannel cluster..."
-kind delete cluster --name $CLUSTER_NAME 2>/dev/null && echo "Old cluster deleted" || echo "No old cluster found"
+kind delete cluster --name $CLUSTER_NAME 2>/dev/null && echo "[flannel] Old cluster removed" || true
 sleep 3
 
 # ---- CLEANUP: remove old test pods if any leftover ----
-echo "[Cleanup] Clearing old test pod definitions..."
 kubectl delete pod latency-test iperf3-client http-test --ignore-not-found 2>/dev/null || true
 
 # ---- STEP 1: Create the kind cluster ----
-echo ""
-echo "[Step 1] Creating kind cluster: $CLUSTER_NAME"
+echo "[flannel] Creating cluster..."
 kind create cluster --config "$PROJECT_DIR/clusters/flannel-cluster.yaml"
-echo "Cluster created"
 
 # ---- STEP 2: Install CNI binary plugins into all nodes ----
 # Kind nodes are missing the 'bridge' CNI binary by default.
 # Flannel needs it to create pod network interfaces.
-echo ""
-echo "[Step 2] Installing CNI binary plugins into all nodes..."
+echo "[flannel] Installing CNI binaries..."
 for node in flannel-cluster-control-plane flannel-cluster-worker flannel-cluster-worker2; do
-  echo "  Installing on $node..."
   docker exec $node bash -c "
     mkdir -p /opt/cni/bin &&
     curl -fsSL https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
     | tar -xz -C /opt/cni/bin
   "
-  echo "  Done: $node"
 done
 
 # ---- STEP 3: Install Flannel CNI ----
-echo ""
-echo "[Step 3] Installing Flannel CNI..."
+echo "[flannel] Installing Flannel CNI..."
 kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-echo "Flannel applied. Waiting for nodes to become Ready (up to 3 min)..."
 kubectl wait --for=condition=Ready nodes --all --timeout=180s
-echo "All nodes are Ready"
-kubectl get nodes
+echo "[flannel] All nodes Ready"
 
 # ---- STEP 4: Deploy benchmark workloads ----
-echo ""
-echo "[Step 4] Deploying benchmark workloads..."
+echo "[flannel] Deploying workloads..."
 kubectl apply -f "$PROJECT_DIR/workloads/iperf3-server.yaml"
 kubectl apply -f "$PROJECT_DIR/workloads/microservice.yaml"
 
-echo "Waiting for iperf3-server to be ready (up to 3 min)..."
 kubectl wait --for=condition=Ready pod/iperf3-server --timeout=180s
-
-echo "Waiting for backend pods to be ready (up to 3 min)..."
 kubectl wait --for=condition=Ready pods -l app=backend --timeout=180s
-
-echo "All workloads are running:"
-kubectl get pods -o wide
 
 # Get server IP and node for tests
 SERVER_IP=$(kubectl get pod iperf3-server -o jsonpath='{.status.podIP}')
@@ -76,15 +55,12 @@ BACKEND_IP=$(kubectl get pod -l app=backend -o jsonpath='{.items[0].status.podIP
 # Record which node the server is on so test pods are forced to a DIFFERENT node
 # This ensures all tests measure real cross-node traffic through the CNI, not same-node loopback
 SERVER_NODE=$(kubectl get pod iperf3-server -o jsonpath='{.spec.nodeName}')
-echo ""
-echo "iperf3 server IP: $SERVER_IP"
-echo "backend IP:       $BACKEND_IP"
-echo "iperf3 server node: $SERVER_NODE  (test pods will run on the other worker)"
+echo "[flannel] iperf3-server: $SERVER_IP on $SERVER_NODE"
+echo "[flannel] backend:       $BACKEND_IP"
 
 # ---- TEST 1: Latency (ping) ----
 # Sends 100 pings at 0.2s intervals (total ~20s), saves min/avg/max stats
-echo ""
-echo "[Test 1] Running latency test (100 pings to iperf3-server)..."
+echo "[flannel] Test 1/4: Latency (100 pings, cross-node)..."
 kubectl delete pod latency-test --ignore-not-found 2>/dev/null
 sleep 2
 # --overrides forces latency-test onto a different node than iperf3-server (cross-node traffic)
@@ -94,17 +70,14 @@ kubectl run latency-test \
   --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- ping -c 100 -i 0.2 $SERVER_IP
 
-echo "Waiting 40 seconds for ping to complete..."
 sleep 40
 
 kubectl logs latency-test > "$RESULTS_DIR/latency_ping.txt"
-echo "Latency result:"
 grep "round-trip\|packets transmitted" "$RESULTS_DIR/latency_ping.txt"
 
 # ---- TEST 2: Bandwidth (iperf3) ----
 # Runs iperf3 for 30 seconds and saves JSON output with throughput data
-echo ""
-echo "[Test 2] Running bandwidth test (iperf3, 30 seconds)..."
+echo "[flannel] Test 2/4: Bandwidth (iperf3, 30s, cross-node)..."
 kubectl delete pod iperf3-client --ignore-not-found 2>/dev/null
 sleep 2
 # --overrides forces iperf3-client onto a different node than iperf3-server (cross-node traffic)
@@ -129,19 +102,17 @@ if [ ! -s "$RESULTS_DIR/bandwidth_iperf3.json" ]; then
   exit 1
 fi
 
-echo "Bandwidth result:"
 python3 -c "
 import json
 with open('$RESULTS_DIR/bandwidth_iperf3.json') as f:
     d = json.load(f)
 bps = d['end']['sum_received']['bits_per_second']
-print('  Received: ' + str(round(bps/1e9, 2)) + ' Gbps')
+print('  Bandwidth: ' + str(round(bps/1e9, 2)) + ' Gbps')
 "
 
 # ---- TEST 3: CPU and memory overhead ----
 # Records the resource requests of Flannel pods (daemonset runs one per node)
-echo ""
-echo "[Test 3] Recording CPU and memory overhead..."
+echo "[flannel] Test 3/4: CPU/memory overhead..."
 {
   echo "=== FLANNEL CPU/MEMORY OVERHEAD ==="
   echo "Timestamp: $(date)"
@@ -157,13 +128,10 @@ echo "[Test 3] Recording CPU and memory overhead..."
   echo "=== FLANNEL RESOURCE SPEC ==="
   kubectl get daemonset kube-flannel-ds -n kube-flannel -o yaml | grep -A 5 "resources:"
 } > "$RESULTS_DIR/cpu_overhead.txt"
-echo "CPU overhead saved"
-cat "$RESULTS_DIR/cpu_overhead.txt"
 
 # ---- TEST 4: HTTP microservice latency ----
 # Makes 50 HTTP requests from one pod to backend, checks all succeed
-echo ""
-echo "[Test 4] Running HTTP microservice latency test (50 requests)..."
+echo "[flannel] Test 4/4: HTTP microservice (50 requests, cross-node)..."
 kubectl delete pod http-test --ignore-not-found 2>/dev/null
 sleep 2
 # --overrides forces http-test onto a different node than iperf3-server (cross-node HTTP traffic)
@@ -181,44 +149,12 @@ kubectl run http-test \
     echo ALL DONE
   "
 
-echo "Waiting 40 seconds for HTTP test to complete..."
 sleep 40
 
 kubectl logs http-test > "$RESULTS_DIR/http_latency.txt"
-echo "HTTP test result:"
 grep "ALL DONE\|request 50" "$RESULTS_DIR/http_latency.txt"
 
-# ---- SUMMARY ----
-echo ""
-echo "============================================================"
-echo "  FLANNEL BENCHMARK SUMMARY"
-echo "============================================================"
-echo ""
-echo "Latency (ping):"
-grep "round-trip\|packets transmitted" "$RESULTS_DIR/latency_ping.txt"
-echo ""
-echo "Bandwidth (iperf3):"
-python3 -c "
-import json
-with open('$RESULTS_DIR/bandwidth_iperf3.json') as f:
-    d = json.load(f)
-bps  = d['end']['sum_received']['bits_per_second']
-sent = d['end']['sum_sent']['bits_per_second']
-print('  Received: ' + str(round(bps/1e9, 2)) + ' Gbps')
-print('  Sent:     ' + str(round(sent/1e9, 2)) + ' Gbps')
-"
-echo ""
-echo "CPU overhead: see $RESULTS_DIR/cpu_overhead.txt"
-echo ""
-echo "HTTP test:"
-grep "ALL DONE" "$RESULTS_DIR/http_latency.txt"
-echo ""
-echo "All results saved to: $RESULTS_DIR"
-echo "============================================================"
+echo "[flannel] Done. Results in $RESULTS_DIR"
 
-# ---- FINAL CLEANUP: delete test pods (keep cluster running for inspection) ----
-echo ""
-echo "[Cleanup] Removing benchmark pods..."
-kubectl delete pod latency-test iperf3-client http-test --ignore-not-found
-echo "Done. Cluster '$CLUSTER_NAME' is still running."
-echo "To delete it, run: kind delete cluster --name $CLUSTER_NAME"
+# ---- FINAL CLEANUP: delete test pods ----
+kubectl delete pod latency-test iperf3-client http-test --ignore-not-found 2>/dev/null

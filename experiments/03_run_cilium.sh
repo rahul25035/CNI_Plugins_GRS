@@ -1,9 +1,5 @@
 #!/bin/bash
-# ============================================================
-# Cilium CNI Benchmark Script
-# Runs all 4 benchmark tests and saves results to results/cilium/
-# Cilium uses eBPF - a kernel-level fast path for packet processing
-# ============================================================
+# Cilium CNI Benchmark
 
 set -e
 
@@ -11,45 +7,32 @@ RESULTS_DIR="$HOME/Desktop/cni-comparison/results/cilium"
 CLUSTER_NAME="cilium-cluster"
 PROJECT_DIR="$HOME/Desktop/cni-comparison"
 
-echo "============================================================"
-echo "  Cilium CNI Benchmark"
-echo "  Results will be saved to: $RESULTS_DIR"
-echo "============================================================"
+echo "[cilium] Results -> $RESULTS_DIR"
 
 # ---- CLEANUP: remove old cluster if it exists ----
-echo ""
-echo "[Cleanup] Removing any existing cilium cluster..."
-kind delete cluster --name $CLUSTER_NAME 2>/dev/null && echo "Old cluster deleted" || echo "No old cluster found"
+kind delete cluster --name $CLUSTER_NAME 2>/dev/null && echo "[cilium] Old cluster removed" || true
 sleep 3
 
 # ---- STEP 1: Create the kind cluster ----
-echo ""
-echo "[Step 1] Creating kind cluster: $CLUSTER_NAME"
+echo "[cilium] Creating cluster..."
 kind create cluster --config "$PROJECT_DIR/clusters/cilium-cluster.yaml"
-echo "Cluster created"
+echo "[cilium] Cluster ready"
 
 # ---- STEP 2: Install CNI binary plugins into all nodes ----
-echo ""
-echo "[Step 2] Installing CNI binary plugins into all nodes..."
+echo "[cilium] Installing CNI binaries..."
 for node in cilium-cluster-control-plane cilium-cluster-worker cilium-cluster-worker2; do
-  echo "  Installing on $node..."
   docker exec $node bash -c "
     mkdir -p /opt/cni/bin &&
     curl -fsSL https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
     | tar -xz -C /opt/cni/bin
   "
-  echo "  Done: $node"
 done
 
 # ---- STEP 3: Install Cilium via Helm ----
-# Cilium is installed using Helm (package manager for Kubernetes)
-# kubeProxyReplacement=false keeps it compatible with kind
-echo ""
-echo "[Step 3] Adding Cilium Helm repo..."
+echo "[cilium] Installing Cilium via Helm..."
 helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true
 helm repo update
 
-echo "Installing Cilium via Helm..."
 helm install cilium cilium/cilium \
   --version 1.14.5 \
   --namespace kube-system \
@@ -58,43 +41,29 @@ helm install cilium cilium/cilium \
   --set tunnel=vxlan \
   --set kubeProxyReplacement=false
 
-echo "Cilium installed. Waiting for nodes to become Ready (up to 5 min)..."
 kubectl wait --for=condition=Ready nodes --all --timeout=300s
-echo "All nodes are Ready"
-kubectl get nodes
+echo "[cilium] All nodes Ready"
 
-# Wait a bit extra for Cilium eBPF programs to fully load
-echo "Waiting 20 extra seconds for Cilium eBPF programs to initialize..."
+# Wait for eBPF programs to fully load
+echo "[cilium] Waiting 20s for eBPF programs to initialize..."
 sleep 20
-echo "Cilium pods status:"
-kubectl get pods -n kube-system | grep cilium
 
 # ---- STEP 4: Deploy benchmark workloads ----
-echo ""
-echo "[Step 4] Deploying benchmark workloads..."
+echo "[cilium] Deploying workloads..."
 kubectl apply -f "$PROJECT_DIR/workloads/iperf3-server.yaml"
 kubectl apply -f "$PROJECT_DIR/workloads/microservice.yaml"
 
-echo "Waiting for iperf3-server to be ready (up to 3 min)..."
 kubectl wait --for=condition=Ready pod/iperf3-server --timeout=180s
-
-echo "Waiting for backend pods to be ready (up to 3 min)..."
 kubectl wait --for=condition=Ready pods -l app=backend --timeout=180s
-
-echo "All workloads are running:"
-kubectl get pods -o wide
 
 SERVER_IP=$(kubectl get pod iperf3-server -o jsonpath='{.status.podIP}')
 BACKEND_IP=$(kubectl get pod -l app=backend -o jsonpath='{.items[0].status.podIP}')
 SERVER_NODE=$(kubectl get pod iperf3-server -o jsonpath='{.spec.nodeName}')
-echo ""
-echo "iperf3 server IP: $SERVER_IP"
-echo "backend IP:       $BACKEND_IP"
-echo "iperf3 server node: $SERVER_NODE  (test pods will run on the other worker)"
+echo "[cilium] iperf3-server: $SERVER_IP on $SERVER_NODE"
+echo "[cilium] backend:       $BACKEND_IP"
 
 # ---- TEST 1: Latency (ping) ----
-echo ""
-echo "[Test 1] Running latency test (100 pings to iperf3-server)..."
+echo "[cilium] Test 1/4: Latency (100 pings, cross-node)..."
 kubectl delete pod latency-test --ignore-not-found 2>/dev/null
 sleep 2
 kubectl run latency-test \
@@ -103,16 +72,13 @@ kubectl run latency-test \
   --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- ping -c 100 -i 0.2 $SERVER_IP
 
-echo "Waiting 40 seconds for ping to complete..."
 sleep 40
 
 kubectl logs latency-test > "$RESULTS_DIR/latency_ping.txt"
-echo "Latency result:"
 grep "round-trip\|packets transmitted" "$RESULTS_DIR/latency_ping.txt"
 
 # ---- TEST 2: Bandwidth (iperf3) ----
-echo ""
-echo "[Test 2] Running bandwidth test (iperf3, 30 seconds)..."
+echo "[cilium] Test 2/4: Bandwidth (iperf3, 30s, cross-node)..."
 kubectl delete pod iperf3-client --ignore-not-found 2>/dev/null
 sleep 2
 kubectl run iperf3-client \
@@ -121,7 +87,6 @@ kubectl run iperf3-client \
   --overrides="{\"spec\":{\"affinity\":{\"nodeAffinity\":{\"requiredDuringSchedulingIgnoredDuringExecution\":{\"nodeSelectorTerms\":[{\"matchExpressions\":[{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[\"$SERVER_NODE\"]}]}]}}}}}" \
   -- iperf3 -c $SERVER_IP -t 30 -J
 
-echo "Waiting for iperf3-client pod to complete (up to 2 min)..."
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/iperf3-client --timeout=120s \
   || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/iperf3-client --timeout=10s \
   || true
@@ -135,19 +100,16 @@ if [ ! -s "$RESULTS_DIR/bandwidth_iperf3.json" ]; then
   exit 1
 fi
 
-echo "Bandwidth result:"
 python3 -c "
 import json
 with open('$RESULTS_DIR/bandwidth_iperf3.json') as f:
     d = json.load(f)
 bps = d['end']['sum_received']['bits_per_second']
-print('  Received: ' + str(round(bps/1e9, 2)) + ' Gbps')
+print('  Bandwidth: ' + str(round(bps/1e9, 2)) + ' Gbps')
 "
 
 # ---- TEST 3: CPU and memory overhead ----
-# Cilium has more components than Flannel: agent + operator + Hubble (if enabled)
-echo ""
-echo "[Test 3] Recording CPU and memory overhead..."
+echo "[cilium] Test 3/4: CPU/memory overhead..."
 {
   echo "=== CILIUM CPU/MEMORY OVERHEAD ==="
   echo "Timestamp: $(date)"
@@ -166,12 +128,9 @@ echo "[Test 3] Recording CPU and memory overhead..."
   echo "not directly under the cilium pod. This makes overhead harder to measure"
   echo "purely from pod resource requests."
 } > "$RESULTS_DIR/cpu_overhead.txt"
-echo "CPU overhead saved"
-cat "$RESULTS_DIR/cpu_overhead.txt"
 
 # ---- TEST 4: HTTP microservice latency ----
-echo ""
-echo "[Test 4] Running HTTP microservice latency test (50 requests)..."
+echo "[cilium] Test 4/4: HTTP microservice (50 requests, cross-node)..."
 kubectl delete pod http-test --ignore-not-found 2>/dev/null
 sleep 2
 kubectl run http-test \
@@ -188,44 +147,12 @@ kubectl run http-test \
     echo ALL DONE
   "
 
-echo "Waiting 40 seconds for HTTP test to complete..."
 sleep 40
 
 kubectl logs http-test > "$RESULTS_DIR/http_latency.txt"
-echo "HTTP test result:"
 grep "ALL DONE\|request 50" "$RESULTS_DIR/http_latency.txt"
 
-# ---- SUMMARY ----
-echo ""
-echo "============================================================"
-echo "  CILIUM BENCHMARK SUMMARY"
-echo "============================================================"
-echo ""
-echo "Latency (ping):"
-grep "round-trip\|packets transmitted" "$RESULTS_DIR/latency_ping.txt"
-echo ""
-echo "Bandwidth (iperf3):"
-python3 -c "
-import json
-with open('$RESULTS_DIR/bandwidth_iperf3.json') as f:
-    d = json.load(f)
-bps  = d['end']['sum_received']['bits_per_second']
-sent = d['end']['sum_sent']['bits_per_second']
-print('  Received: ' + str(round(bps/1e9, 2)) + ' Gbps')
-print('  Sent:     ' + str(round(sent/1e9, 2)) + ' Gbps')
-"
-echo ""
-echo "CPU overhead: see $RESULTS_DIR/cpu_overhead.txt"
-echo ""
-echo "HTTP test:"
-grep "ALL DONE" "$RESULTS_DIR/http_latency.txt"
-echo ""
-echo "All results saved to: $RESULTS_DIR"
-echo "============================================================"
+echo "[cilium] Done. Results in $RESULTS_DIR"
 
 # ---- FINAL CLEANUP ----
-echo ""
-echo "[Cleanup] Removing benchmark pods..."
 kubectl delete pod latency-test iperf3-client http-test --ignore-not-found
-echo "Done. Cluster '$CLUSTER_NAME' is still running."
-echo "To delete it, run: kind delete cluster --name $CLUSTER_NAME"
