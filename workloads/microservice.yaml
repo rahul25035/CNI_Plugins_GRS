@@ -1,0 +1,74 @@
+# Simulates a real microservice pattern: a frontend (load-generator) calling a backend (nginx)
+# This creates realistic cross-pod HTTP traffic for the HTTP latency test
+
+# Backend: 2 nginx replicas spread across worker nodes
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+---
+# Service so load-generator can reach the backend by DNS name (backend-svc)
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc
+spec:
+  selector:
+    app: backend
+  ports:
+  - port: 80
+    targetPort: 80
+---
+# Load generator: constantly sends HTTP requests to backend every 100ms
+# Simulates real microservice communication patterns
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loadgen
+  template:
+    metadata:
+      labels:
+        app: loadgen
+    spec:
+      containers:
+      - name: loadgen
+        image: busybox
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Load generator started"
+          while true; do
+            wget -q -O /dev/null http://backend-svc/
+            sleep 0.1
+          done
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"

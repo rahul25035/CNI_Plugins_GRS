@@ -1,0 +1,13 @@
+# Flannel cluster config for kind
+# disableDefaultCNI lets us install Flannel manually
+# podSubnet is Flannel's default IP range
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: flannel-cluster
+networking:
+  disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

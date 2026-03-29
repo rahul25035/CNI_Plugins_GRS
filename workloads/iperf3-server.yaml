@@ -1,0 +1,27 @@
+# iperf3 server pod - listens for incoming bandwidth test connections on port 5201
+# The service exposes it so any pod in the cluster can reach it by IP
+apiVersion: v1
+kind: Pod
+metadata:
+  name: iperf3-server
+  labels:
+    app: iperf3-server
+spec:
+  containers:
+  - name: iperf3
+    image: networkstatic/iperf3
+    args: ["-s"]       # -s = server mode, waits for client to connect
+    ports:
+    - containerPort: 5201
+---
+# Service so other pods can reach iperf3-server by IP
+apiVersion: v1
+kind: Service
+metadata:
+  name: iperf3-service
+spec:
+  selector:
+    app: iperf3-server
+  ports:
+  - port: 5201
+    targetPort: 5201

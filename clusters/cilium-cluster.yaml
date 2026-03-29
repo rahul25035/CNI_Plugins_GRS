@@ -1,0 +1,12 @@
+# Cilium cluster config for kind
+# podSubnet 10.0.0.0/8 gives Cilium a large range to work with
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cilium-cluster
+networking:
+  disableDefaultCNI: true
+  podSubnet: "10.0.0.0/8"
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

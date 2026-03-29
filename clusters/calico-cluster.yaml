@@ -1,0 +1,12 @@
+# Calico cluster config for kind
+# podSubnet 192.168.0.0/16 is Calico's default IP range
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: calico-cluster
+networking:
+  disableDefaultCNI: true
+  podSubnet: "192.168.0.0/16"
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
